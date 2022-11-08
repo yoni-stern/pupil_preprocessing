@@ -1,0 +1,307 @@
+---
+title: "preprocess_pupil"
+author: "Yoni"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r load libraries}
+library(rstudioapi)
+library(hms)
+library(lubridate)
+library(vroom)
+library(ggpubr)
+library(gazer)
+library(tidyverse)
+```
+
+
+```{r source paramaters & functions}
+#parameters
+source("parameters_for_pupil_pp.R")
+
+#functions
+# custom functions for pupil PP
+source("functions_for_pupil_pp.R")
+
+#functions for pp' SoA task
+source("functions_for_pp_SoA.R")
+
+#functions for pp'ing of eye movements and tracker data
+source('functions4EM_analysis.R')
+
+```
+
+
+#loading files
+This is done by running script on vector of subjects
+Define the vector & location of folders in parameters file
+```{r get file names}
+# done by get_fnames_by_vec function see its documentation
+fnames_df<-get_fnames_by_vec(path_to_all_sub_folder=path_to_all_sub_folder, sub_folder_suffix=sub_folder_suffix,sub_num_vec=sub_num_vec,subfolder_name=subfolder_name)
+
+```
+
+# start loop
+
+```{r merge files}
+
+# creating   collector variables
+
+#this is for down sampled (processed) pup data
+df.pup.processed.list<-vector("list",nrow(fnames_df))
+#this is for the aligned
+df.eye.align.list<-vector("list",nrow(fnames_df))
+
+##starting the loop
+for (sub_idx in 1:nrow(fnames_df)) {
+  
+  print(str_glue("processing", fnames_df$sub_name[sub_idx]))
+  #loading files #######
+  
+  ## trial
+  trial_df<-read_csv(fnames_df$trial_fname[sub_idx],show_col_types = FALSE)
+  
+  #answers
+  ans_df<-read_csv(fnames_df$ans_fname[sub_idx],show_col_types = FALSE)
+  
+  #trkr
+  sub_trkr_output<- vroom(fnames_df$trkr_fname[sub_idx],show_col_types = FALSE)
+  
+  
+  ### Preprocessing behavioral data ######
+  
+  #PP according to the experiment type. At the end we get a df "behav_data_df
+  
+  if(exp_type=="SoA") { # ppreprocessing of SoA
+    #merge Trial & answer files to single df
+    behav_data_df<-merge_trial_ans_SoA(trial_df,ans_df,sub_name = fnames_df$sub_name[sub_idx])
+    
+    #remove trials with non-positive index
+    behav_data_df<-behav_data_df%>%
+      dplyr::filter(TrialNumber>0)
+    
+  } else if (exp_type=="WBF"){ #preprocessing of WBF behav data
+    
+    # pp'ing WBF answer file- this shifts the question cue to the appropriate question
+    ans_df_processed<-pp_wbf_ans(ans_df)
+    
+    #pp'ing to merge w/answer & add acc & BF location & other stuff
+    behav_data_df<-merge_trial_ans_wbf(
+      ans_file = ans_df_processed,
+      trial_file = trial_df, 
+      right_BF_loc = right_BF_loc,
+      q_ind_2222, q_ind_3333
+    )
+    
+  }
+  
+  
+  #### Start PP'ing of pupil ####
+  
+  ### preping trkr df #####
+  #remove calibration trial (trials with non-positive value)
+  trkr_df<-sub_trkr_output%>%
+    dplyr::filter(TrialNumber>0)
+  
+  #remove duplicate rows in trkr csv
+  trkr_df<-trkr_df%>%
+    dplyr::group_by(TrialNumber)%>%
+    distinct(FrameNumber,.keep_all=TRUE)
+  
+  #change coding of pupil values from -1 to NA (this is necessary for GAZER package)
+  trkr_df<-trkr_df%>%
+    mutate(left.pupil_diameter_mm=ifelse(left.pupil_diameter_mm == -1,NA,left.pupil_diameter_mm),
+           right.pupil_diameter_mm=ifelse(right.pupil_diameter_mm == -1,NA,right.pupil_diameter_mm))
+  
+  
+  ##converting tms to hms resolution (done via the function "convert_ts_to_hms")
+  trkr_df<-trkr_df%>%
+    dplyr::rowwise()%>%
+    dplyr::mutate(TimeStamp=convert_ts_to_hms(TimeStamp))
+  
+  
+  #add column with relative time in ms from start of the trial. This is the time we use for the GAZER library
+  trkr_df<-trkr_df%>%
+    dplyr::group_by(TrialNumber)%>%
+    dplyr::mutate(rel_time_trial=as.numeric(TimeStamp-first(TimeStamp))*1000) 
+  
+  
+  ##adding EVEMT MESSAGES (in GAZER this allows for cutting and alighnment of trials & baseline correction based on specfic events)
+  
+  #(TO DO ADD MESSAGES WHEN SUBJECT MOVED HAND etc. )
+  #PRBLY should also change the format of the function to allow additional add ons
+  
+  #adding message when trial started & when Question was presented
+  trkr_df<-trkr_df%>% 
+    dplyr::group_by(TrialNumber)%>%
+    mutate(lg_ss= lag(SecondarySceneName), lg_s=lag(SceneName),
+           message=if_else(( SceneName=="Room"& SecondarySceneName =="NoBlockView" & lg_ss=="BlockView"),"start_room", #room start
+                           if_else((SceneName=="Question" & lg_s=="Room"),"start_question","NA" ) #question start 
+           )
+    )%>%
+    dplyr::select(-c(lg_s,lg_ss))
+  
+  
+  
+  ##### 1. merge with behavioral data & reordering columns (this will be called df.eye) #####
+  if(exp_type=="SoA") { # merging of SoA
+    
+    df.eye.raw<- left_join(trkr_df%>%
+                             dplyr::select(TrialNumber,TimeStamp,rel_time_trial, right.pupil_diameter_mm,right.eye_openness,message,SceneName,SecondarySceneName),
+                           behav_data_df%>%
+                             dplyr::select(sub_name,TrialNumber,delay,IsCong,is_acc,Conf,RT_IsCong,SDT_cat)
+                           , by=c("TrialNumber"))%>%
+      relocate(sub_name,TrialNumber,delay,IsCong,is_acc,Conf,RT_IsCong)%>%
+      dplyr::relocate(c("TimeStamp","SceneName","SecondarySceneName"),.after = last_col())%>%
+      #rename columns according to GAZER requirments
+      dplyr::rename(trial=TrialNumber, time=rel_time_trial,pupil=right.pupil_diameter_mm) %>%
+      dplyr::rename(subject=sub_name)
+    
+  } else if (exp_type=="WBF"){ #merging of WBF behav data
+    ##NEED TO WRITE THE CODE WITH RELEVANT COLUMNS
+  } 
+  
+  ##### 2. Extending Debliniking #####
+  df.eye.pup_extended<- df.eye.raw %>% 
+    dplyr::mutate(extendpupil=extend_blinks(pupil,fillback = deblink_fill_back_val,fillforward = deblink_fill_forward_val,hz=init_sample_rate))%>%
+    relocate(c("extendpupil"),.after=pupil)
+  
+  #### 3. smoothing & interpolating ######
+  # see GAZER documentation for documentation of input arguments. 
+  # Linear interpolation is 
+  df.eye.smooth_interp <- smooth_interpolate_pupil(df.eye.pup_extended, 
+                                                   pupil="pupil", 
+                                                   extendpupil="extendpupil", 
+                                                   extendblinks=TRUE, 
+                                                   step.first="interp", 
+                                                   filter="moving",
+                                                   maxgap=5, #  is1 second 
+                                                   type="linear", 
+                                                   hz=init_sample_rate, 
+                                                   n=5)%>%
+    dplyr::relocate(c("interp","pup_interp"),.after=extendpupil)%>% #relocate col for convenience
+    dplyr::select(-interp) #interp is the same as extendedpupil, so removing it 
+  
+  
+  #### 4. Baseline correction ######
+  df.eye.baseline<-baseline_correction_pupil_msg(datafile=df.eye.smooth_interp,
+                                                 pupil_colname='pup_interp',
+                                                 baseline_dur=100, 
+                                                 event="start_room",
+                                                 baseline_method = "sub")%>%
+    dplyr::relocate("baselinecorrectedp",.after = pupil)%>%
+    dplyr::relocate("baseline",.after=last_col())
+  
+  
+  ##### 5. scaling per trial #####
+  
+  df.eye.pupilz<-df.eye.baseline%>% 
+    group_by(subject, trial) %>% 
+    mutate(pupilz=scale_this(baselinecorrectedp))%>% #getting z score. Using custom function scale_this. See function for details
+    dplyr::relocate("pupilz",.after=pupil)
+  
+  
+  ##### 6. removing trials with too much missing data #####
+  df.eye.removemiss<-count_missing_pupil(df.eye.pupilz,missingthresh = missing_thresh_per_trial)
+  
+  
+  
+  ##### 7. MAD removal #######
+  df.eye.mad<-df.eye.removemiss%>%
+    dplyr::group_by(subject,trial)%>%
+    dplyr::mutate(speed=speed_pupil(pup_interp,time = time))%>% #calculated speed of pupil dilation (currently doing interpolated value) NEED to read article and see if this can be done on z-score of pupil
+    dplyr::mutate(MAD=calc_mad(speed,n=16))%>% #n=16 is the constant used to multiply. for now we'll stick to it
+    filter(speed < MAD) 
+  
+  
+  ##### 8. event time alignment ######
+  df.eye.align<-df.eye.mad%>%
+    dplyr::group_by(subject,trial)%>%
+    dplyr::mutate(time_zero=onset_pupil(time,marker=message,event=c("start_room")))%>% #time_zero is aligned according to start of room
+    dplyr::ungroup()%>%
+    dplyr::filter(time_zero>= start_time_zero & time_zero <=end_time_zero)
+  
+  
+  
+  
+  
+  ##### 9. Downsampling ###### 
+  df.eye.downsmpl<-df.eye.align%>%
+    dplyr::mutate(bin=findInterval(time_zero,bin_vec))%>% #maybe subtract from bin so that before baseline is negative?
+    dplyr::group_by(subject,trial,bin)%>%
+    dplyr::mutate(pupil_ds=mean(baselinecorrectedp))%>% 
+    dplyr::group_by(subject,trial,bin)%>%
+    dplyr::filter(row_number()==1)
+  
+  ##### 10. Selecting relevant columns to save as final df 
+  df.pup.processed<-df.eye.downsmpl%>%
+    dplyr::select(c(subject,trial,pupil_ds,bin,delay:RT_IsCong))%>% #selecting relevant columns
+    dplyr::mutate(bin=(bin-2)*bin_dur_ms)%>%
+    dplyr::mutate(is_altered=if_else(delay==0,"unaltered","altered")) 
+  
+  ##### 11. saving into list ######
+  df.pup.processed.list[[sub_idx]]<-df.pup.processed
+  df.eye.align.list [[sub_idx]] <-vector("list",nrow(fnames_df))
+}
+
+
+#### Unbinding of list
+all.df.pup.processed<-dplyr::bind_rows(df.pup.processed.list)
+all.df.eye.align<-dplyr::bind_rows(df.eye.align.list)
+
+
+##WRITE HERE THE NAME YOU WANT TO SAVE 
+write_csv(all.df.pup.processed,"pup_df_ys.csv")
+
+write_csv(all.df.eye.align,"pup_align_df_ys.csv")
+
+```
+
+
+
+```{r visualize pup size per altered /unaltered}
+
+all.df.pup.per_alter<-all.df.pup.processed%>%
+  dplyr::group_by(subject,bin,is_altered)%>%
+  dplyr::summarize(pup_proc=mean(pupil_ds),hi_pup=CI(pupil_ds)[1],lo_pup=CI(pupil_ds)[3])
+
+
+c_vec<-c("chocolate3","aquamarine3")
+(
+  ggplot(all.df.pup.per_alter%>%filter(bin<36*bin_dur_ms),
+         aes(x=bin, y=pup_proc, group=is_altered, color=is_altered))+
+    
+    geom_ribbon(aes(ymin=lo_pup,ymax=hi_pup,fill=is_altered),alpha=.1,colour = NA)+
+    geom_line(alpha=.4)+
+    scale_fill_manual(values=c_vec)+
+    scale_color_manual(values=c_vec)+
+    theme_classic()+
+    ylab("processed pupil [mm]")+
+    xlab("time relative to start Room [ms]")+
+    ggtitle("Pupil per Altered/Unaltered (all trials)")+
+    facet_wrap(~subject,scales = "free")
+)
+
+
+##group statistic
+m_pup_per_alter<-all.df.pup.per_alter%>%
+  dplyr::group_by(bin,is_altered)%>%
+  dplyr::summarize(m_pup_proc=mean(pup_proc),hi_pup=CI(pup_proc)[1],lo_pup=CI(pup_proc)[3])
+
+
+(
+  ggplot(m_pup_per_alter%>%filter(bin<36*bin_dur_ms),
+         aes(x=bin, y=m_pup_proc, group=is_altered, color=is_altered))+
+    
+    geom_ribbon(aes(ymin=lo_pup,ymax=hi_pup,fill=is_altered),alpha=.1,colour = NA)+
+    geom_line(alpha=.4)+
+    scale_fill_manual(values=c_vec)+
+    scale_color_manual(values=c_vec)+
+    theme_classic()+
+    ylab("processed pupil [mm]")+
+    xlab("time relative to start Room [ms]")+
+    ggtitle("Pupil per Altered/Unaltered (all trials)")
+)
+
+```
