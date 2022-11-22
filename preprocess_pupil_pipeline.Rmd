@@ -5,6 +5,11 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
+```{r set up knitr options}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
 ```{r load libraries}
 library(rstudioapi)
 library(hms)
@@ -24,7 +29,8 @@ source("parameters_for_pupil_pp.R")
 # custom functions for pupil PP
 source("functions_for_pupil_pp.R")
 
-#functions for pp' SoA task
+#functions for pp' SoA task- THIS IS DEPENDENT ON THE EXPERIMENT YOU ARE ANALYZING & each experiment works with its own 
+
 source("functions_for_pp_SoA.R")
 
 #functions for pp'ing of eye movements and tracker data
@@ -38,7 +44,8 @@ This is done by running script on vector of subjects
 Define the vector & location of folders in parameters file
 ```{r get file names}
 # done by get_fnames_by_vec function see its documentation
-fnames_df<-get_fnames_by_vec(path_to_all_sub_folder=path_to_all_sub_folder, sub_folder_suffix=sub_folder_suffix,sub_num_vec=sub_num_vec,subfolder_name=subfolder_name)
+fnames_df<-get_fnames_by_vec(path_to_all_sub_folder=path_to_all_sub_folder, sub_folder_suffix=sub_folder_suffix,
+                             sub_num_vec=sub_num_vec,subfolder_name=subfolder_name)
 
 ```
 
@@ -242,7 +249,7 @@ for (sub_idx in 1:nrow(fnames_df)) {
   
   ##### 11. saving into list ######
   df.pup.processed.list[[sub_idx]]<-df.pup.processed
-  df.eye.align.list [[sub_idx]] <-vector("list",nrow(fnames_df))
+  df.eye.align.list [[sub_idx]] <-df.eye.align
 }
 
 
@@ -252,56 +259,13 @@ all.df.eye.align<-dplyr::bind_rows(df.eye.align.list)
 
 
 ##WRITE HERE THE NAME YOU WANT TO SAVE 
-write_csv(all.df.pup.processed,"pup_df_ys.csv")
+#saving the processed pupil data
+write_csv(all.df.pup.processed,str_glue("pup.slim_",export_fname,Sys.Date(),".csv"))
 
-write_csv(all.df.eye.align,"pup_align_df_ys.csv")
-
-```
-
-
-
-```{r visualize pup size per altered /unaltered}
-
-all.df.pup.per_alter<-all.df.pup.processed%>%
-  dplyr::group_by(subject,bin,is_altered)%>%
-  dplyr::summarize(pup_proc=mean(pupil_ds),hi_pup=CI(pupil_ds)[1],lo_pup=CI(pupil_ds)[3])
-
-
-c_vec<-c("chocolate3","aquamarine3")
-(
-  ggplot(all.df.pup.per_alter%>%filter(bin<36*bin_dur_ms),
-         aes(x=bin, y=pup_proc, group=is_altered, color=is_altered))+
-    
-    geom_ribbon(aes(ymin=lo_pup,ymax=hi_pup,fill=is_altered),alpha=.1,colour = NA)+
-    geom_line(alpha=.4)+
-    scale_fill_manual(values=c_vec)+
-    scale_color_manual(values=c_vec)+
-    theme_classic()+
-    ylab("processed pupil [mm]")+
-    xlab("time relative to start Room [ms]")+
-    ggtitle("Pupil per Altered/Unaltered (all trials)")+
-    facet_wrap(~subject,scales = "free")
-)
-
-
-##group statistic
-m_pup_per_alter<-all.df.pup.per_alter%>%
-  dplyr::group_by(bin,is_altered)%>%
-  dplyr::summarize(m_pup_proc=mean(pup_proc),hi_pup=CI(pup_proc)[1],lo_pup=CI(pup_proc)[3])
-
-
-(
-  ggplot(m_pup_per_alter%>%filter(bin<36*bin_dur_ms),
-         aes(x=bin, y=m_pup_proc, group=is_altered, color=is_altered))+
-    
-    geom_ribbon(aes(ymin=lo_pup,ymax=hi_pup,fill=is_altered),alpha=.1,colour = NA)+
-    geom_line(alpha=.4)+
-    scale_fill_manual(values=c_vec)+
-    scale_color_manual(values=c_vec)+
-    theme_classic()+
-    ylab("processed pupil [mm]")+
-    xlab("time relative to start Room [ms]")+
-    ggtitle("Pupil per Altered/Unaltered (all trials)")
-)
+#saving all the data 
+write_csv(all.df.eye.align,str_glue("pup.all_stages_",export_fname,Sys.Date(),".csv"))
 
 ```
+
+
+
