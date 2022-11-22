@@ -12,6 +12,11 @@ It builds strongly on Paris' pipeline & the Gazer package.
 Highly recommended to first read the [GAZER paper] (https://link.springer.com/article/10.3758/s13428-020-01374-8)
 & do their [vignette] (https://github.com/dmirman/gazer/blob/master/vignettes/Pupil-vignette.Rmd)
 
+```{r set up knitr options}
+# knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
 ```{r load libraries}
 library(rstudioapi)
 library(hms)
@@ -52,7 +57,7 @@ As a sidenote, this is only for the walkthrough. In the pp'ing pipeline a script
 ```{r get file names}
 
 #fnames_df is tibble with pathes for all three files & subject name 
-fnames_df<-get_fnames_by_gui(sub_folder_suffix) #  this function is comaptible also with macs
+fnames_df<-get_fnames_by_gui(sub_folder_suffix) #  this function is compatible also with macs
 
 
 ```
@@ -159,7 +164,7 @@ vlines<-trkr_df$rel_time_exp[which(trkr_df$message=="start_room")]
 
 #getting mean across trials
 mean_pup_per_trial_df<-trkr_df%>%
-  dplyr::filter(rel_time_trial<hi_time_zero)%>%
+  dplyr::filter(rel_time_trial<end_time_zero)%>%
   dplyr::filter(!is.na(right.pupil_diameter_mm))%>%
   dplyr::group_by(TrialNumber)%>%
   dplyr::mutate(bin=findInterval(rel_time_trial,bin_vec))%>%
@@ -173,7 +178,7 @@ mean_pup_per_trial_df<-trkr_df%>%
 
 #getting per trial
 pup_per_trial_df<-trkr_df%>%
-  dplyr::filter(rel_time_trial<hi_time_zero)%>%
+  dplyr::filter(rel_time_trial<end_time_zero)%>%
   dplyr::filter(!is.na(right.pupil_diameter_mm))%>%
   dplyr::group_by(TrialNumber)%>%
   dplyr::mutate(bin=findInterval(rel_time_trial,bin_vec))%>%
@@ -254,6 +259,7 @@ We need to account for this with different butterfly locations
 )
 
 ```
+
 Overall noraml distributin, we have some outliers that we will deal with....
 
 # Preprocessing of pupil
@@ -498,7 +504,7 @@ df.eye.align<-df.eye.mad%>%
 ```{r downsample}
 
 ##Gazer's downasample isn't working. 
-#Instead using a dplyr's "ntile" function 
+#Instead using findInterval function 
 ## TO DO!! merge align with the initial visualization
 
 
